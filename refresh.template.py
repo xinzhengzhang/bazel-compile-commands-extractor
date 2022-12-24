@@ -837,7 +837,9 @@ def _get_commands(target: str, flags: str):
     # Pass along all arguments to aquery, except for --file filters
     additional_flags = shlex.split(flags) + [arg for arg in sys.argv[1:] if not arg.startswith('--file=')]
     file_flags = [arg[len('--file='):] for arg in sys.argv[1:] if arg.startswith('--file=')]
-    assert len(file_flags) < 2, f"Only one or zero --file is supported current args = {sys.argv[1:]}"
+    if len(file_flags) > 1:
+        log_error(">>> At most one --file filter is supported.")
+        sys.exit(1)
 
     # Detect anything that looks like a build target in the flags, and issue a warning.
     # Note that positional arguments after -- are all interpreted as target patterns. (If it's at the end, then no worries.)
