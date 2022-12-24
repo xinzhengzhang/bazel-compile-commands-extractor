@@ -863,15 +863,14 @@ def _get_commands(target: str, flags: str):
         # For efficiency, have bazel filter out external targets (and therefore actions) before they even get turned into actions or serialized and sent to us. Note: this is a different mechanism than is used for excluding just external headers.
         target_statment = f"filter('^//',{target_statment})"
     if file_flags:
-        # Query escape
-        file_path = file_path.replace("+", "\+").replace("-", "\-")
+        file_path = file_flags[0]
         # For header file we try to find from hdrs and srcs to get the targets
         if file_path.endswith('.h'):
             # Since attr function can't query with full path, get the file name to query
             head, tail = os.path.split(file_path)
             target_statment = f"attr(hdrs, '{tail}', {target_statment}) + attr(srcs, '{tail}', {target_statment})"
         else:
-            target_statment = f"inputs('{file_path}', {target_statment})"
+            target_statment = f"inputs('{re.escape(file_path)}', {target_statment})"
     aquery_args = [
         'bazel',
         'aquery',
