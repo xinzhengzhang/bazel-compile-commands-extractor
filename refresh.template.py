@@ -845,9 +845,9 @@ def _get_commands(target: str, flags: str):
         sys.exit(1)
 
     # Detect anything that looks like a build target in the flags, and issue a warning.
-    # Note that positional arguments after -- are all interpreted as target patterns. (If it's at the end, then no worries.)
+    # Note that positional arguments after -- are all interpreted as target patterns.
     # And that we have to look for targets. checking for a - prefix is not enough. Consider the case of `-c opt` leading to a false positive
-    if ('--' in additional_flags[:-1]
+    if ('--' in additional_flags
         or any(re.match(r'-?(@|:|//)', f) for f in additional_flags)):
         log_warning(""">>> The flags you passed seem to contain targets.
     Try adding them as targets in your refresh_compile_commands rather than flags.
