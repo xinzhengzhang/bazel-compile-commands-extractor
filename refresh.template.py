@@ -1065,6 +1065,17 @@ if __name__ == '__main__':
     for (target, flags) in target_flag_pairs:
         compile_command_entries.extend(_get_commands(target, flags))
 
+    should_merge = any(arg.startswith('--file') for arg in sys.argv[1:])
+    if should_merge and os.path.isfile('compile_commands.json'):
+        origin_compile_command_entries = []
+        with open('compile_commands.json') as fd:
+            try:
+                origin_compile_command_entries = json.load(fd)
+            except:
+                log_warning(">>> Failed to merge compile_commands.json the file seems has broken")
+        files_index = set(entry['file'] for entry in compile_command_entries)
+        compile_command_entries += [entry for entry in origin_compile_command_entries if entry['file'] not in files_index]
+
     # Chain output into compile_commands.json
     with open('compile_commands.json', 'w') as output_file:
         json.dump(
