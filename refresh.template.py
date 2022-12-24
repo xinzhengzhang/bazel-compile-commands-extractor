@@ -840,6 +840,9 @@ def _get_commands(target: str, flags: str):
     if len(file_flags) > 1:
         log_error(">>> At most one --file flag is supported.")
         sys.exit(1)
+    if any(arg.startswith('--file') for arg in additional_flags):
+        log_error(">>> Only the --file=<file_target> form is supported.")
+        sys.exit(1)
 
     # Detect anything that looks like a build target in the flags, and issue a warning.
     # Note that positional arguments after -- are all interpreted as target patterns. (If it's at the end, then no worries.)
