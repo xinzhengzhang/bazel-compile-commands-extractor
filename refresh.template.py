@@ -868,13 +868,13 @@ def _get_commands(target: str, flags: str):
         target_statment = f"filter('^//', {target_statment})"
     if file_flags:
         file_path = file_flags[0]
-        # For header file we try to find from hdrs and srcs to get the targets
-        if file_path.endswith('.h'):
+        if any(file_path.endswith(extension) for extension in _get_files.source_extensions):
+            target_statment = f"inputs('{re.escape(file_path)}', {target_statment})"
+        else:
+            # For header file we try to find from hdrs and srcs to get the targets
             # Since attr function can't query with full path, get the file name to query
             head, tail = os.path.split(file_path)
             target_statment = f"attr(hdrs, '{tail}', {target_statment}) + attr(srcs, '{tail}', {target_statment})"
-        else:
-            target_statment = f"inputs('{re.escape(file_path)}', {target_statment})"
     aquery_args = [
         'bazel',
         'aquery',
