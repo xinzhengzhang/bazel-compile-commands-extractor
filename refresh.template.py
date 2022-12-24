@@ -874,7 +874,7 @@ def _get_commands(target: str, flags: str):
             # For header file we try to find from hdrs and srcs to get the targets
             # Since attr function can't query with full path, get the file name to query
             head, tail = os.path.split(file_path)
-            target_statment = f"attr(hdrs, '{tail}', {target_statment}) + attr(srcs, '{tail}', {target_statment})"
+            target_statment = f"let v = {target_statment} in attr(hdrs, '{tail}', $v) + attr(srcs, '{tail}', $v)"
     aquery_args = [
         'bazel',
         'aquery',
