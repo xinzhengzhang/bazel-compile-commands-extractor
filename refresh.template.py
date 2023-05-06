@@ -825,6 +825,7 @@ def _convert_compile_commands(aquery_output, focused_on_file: str = None):
             assert not target.startswith('//external'), f"Expecting external targets will start with @. Found //external for action {action}, target {target}"
             action.is_external = target.startswith('@') and not target.startswith('@//')
 
+    outputs = []
     # Process each action from Bazelisms -> file paths and their clang commands
     # Threads instead of processes because most of the execution time is farmed out to subprocesses. No need to sidestep the GIL. Might change after https://github.com/clangd/clangd/issues/123 resolved
     with concurrent.futures.ThreadPoolExecutor(
@@ -836,17 +837,16 @@ def _convert_compile_commands(aquery_output, focused_on_file: str = None):
             aquery_output.actions,
             timeout=3 if focused_on_file else None  # If running in fast, interactive mode with --file, we need to cap latency. #TODO test timeout--if it doesn't work, cap input length here, before passing in array. Might also want to divide timeout/cap by #targets
         )
-    # Collect outputs, tolerating any timeouts
-    outputs = []
-    try:
-        for output in output_iterator:
-            outputs.append(output)
-    except concurrent.futures.TimeoutError:
-        assert focused_on_file, "Timeout should only have been set in the fast, interactive --file mode, focused on a single file."
-        if not found_header_focused_upon.is_set():
-            log_warning(f""">>> Timed out looking for a command for {focused_on_file}
-    If that's a source file, please report this. We should work to improve the performance.
-    If that's a header file, we should probably do the same, but it may be unavoidable.""")
+        # Collect outputs, tolerating any timeouts
+        try:
+            for output in output_iterator:
+                outputs.append(output)
+        except concurrent.futures.TimeoutError:
+            assert focused_on_file, "Timeout should only have been set in the fast, interactive --file mode, focused on a single file."
+            if not found_header_focused_upon.is_set():
+                log_warning(f""">>> Timed out looking for a command for {focused_on_file}
+        If that's a source file, please report this. We should work to improve the performance.
+        If that's a header file, we should probably do the same, but it may be unavoidable.""")
 
     # Yield as compile_commands.json entries
     header_files_already_written = set()
