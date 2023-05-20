@@ -983,16 +983,48 @@ def _get_commands(target: str, flags: str):
     compile_commands = [] # TODO simplify loop, especially if we can reduce it to one command per case (see below)? Move warning messages outside?
     if file_flags:
         file_path = file_flags[0]
+        # Normalize file_path into 2 types of relative paths.
+        # Source file. 1. <WORKSPACE_ROOT>/srcs/file 2. <OUTPUT_BASE>/external/<REPO>/srcs/file
+        # Genfiles or output file. <EXECUTION_ROOT>/bazel-out/<configurations>/bin/srcs/file
+
+        pure_path = pathlib.PurePath(file_path)
+
+        if pure_path.is_absolute():
+            workspace_root = subprocess.check_output(["bazel", "info", "workspace"], stderr=subprocess. DEVNULL).decode("utf-8").strip()
+            output_base = subprocess.check_output(["bazel", "info", "output_base"], stderr=subprocess. DEVNULL).decode("utf-8").strip()
+            execution_root = subprocess.check_output(["bazel", "info", "execution_root"], stderr=subprocess. DEVNULL).decode("utf-8").strip()
+
+            if pure_path.is_relative_to(workspace_root):
+                file_path = str(pure_path.relative_to(workspace_root))
+            # Execution_root is longer then output_base
+            elif pure_path.is_relative_to(execution_root):
+                file_path = str(pure_path.relative_to(execution_root))
+            elif pure_path.is_relative_to(output_base):
+                file_path = str(pure_path.relative_to(output_base))
+            else:
+                # Treat pure_path as system absolute path
+                pass
+
         found = False
         target_statement_candidates = []
         if file_path.endswith(_get_files.source_extensions):
             target_statement_candidates.append(f"inputs('{re.escape(file_path)}', {target_statement})")
         else:
-            fname = os.path.basename(file_path) # TODO consider running a  preliminary aquery to make this more specific, getting the targets that generate the given file. Use outputs() aquery function. Should also test the case where the file is generated/is coming in as a filegroup--that's likely to be fixed by this change.
-            header_target_statement = f"let v = {target_statement} in attr(hdrs, '{fname}', $v) + attr(srcs, '{fname}', $v)" # Bazel does not list headers as direct inputs, but rather hides them behind "middlemen", necessitating a query like this.
+            middle_target_candidates = subprocess.Popen(f"bazel aquery 'outputs('{re.escape(file_path)}', {target_statement})' | grep -o 'Target: .*' | grep -o '[@/].*'", shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).communicate()[0].decode("utf-8").strip().splitlines()
+            if middle_target_candidates:
+                log_info(f">>> File detected as intermediate of {middle_target_candidates}")
+                target_statement_candidates.extend([
+                    # TODO there seems a bug in bazel aquery? There are many targets listed output when executing bazel query "somepath('TARGET', 'SUBTARGET')" but there isn't any actions output when executing bazel aquery "somepath('TARGET', 'SUBTARGET')" and it works when executing bazel aquery "<somepath of target>"
+                    f"allpaths({target}, {'+'.join(middle_target_candidates)})"
+                ])
+            else:
+                fname = os.path.basename(file_path) # TODO consider running a  preliminary aquery to make this more specific, getting the targets that generate the given file. Use outputs() aquery function. Should also test the case where the file is generated/is coming in as a filegroup--that's likely to be fixed by this change.
+                header_target_statement = f"let v = {target_statement} in attr(hdrs, '{fname}', $v) + attr(srcs, '{fname}', $v)" # Bazel does not list headers as direct inputs, but rather hides them behind "middlemen", necessitating a query like this.
+                target_statement_candidates.extend([
+                    header_target_statement,
+                    f"allpaths({target}, {header_target_statement})",  # Ordering is ideal, breadth-first from the deepest dependency, despite the docs. TODO (1) There's a bazel bug that produces extra actions, not on the path but downstream, so we probably want to pass --noinclude_aspects per https://github.com/bazelbuild/bazel/issues/18289 and https://github.com/bazelbuild/bazel/issues/16310 to eliminate them (at the cost of some valid aspects). (2) We might want to benchmark with --infer_universe_scope (if supported) and --universe-scope=target with query allrdeps({header_target_statement}, <maybe some limited depth>) or rdeps, checking speed but also ordering (the docs indicate it is likely to be lost, which is a problem) and for inclusion of the header target. We'd guess it'll have the same aspects bug as allpaths. (3) We probably also also want to *just* run this query, not the whole list, since it captures the former and is therefore unlikely to add much latency, since a given header is probabably either used internally to the target (find on first match) for header-only (must traverse all paths in all targets until you get a match) for all top-level targets, and since we can separate out the last, see below.
+                ])
             target_statement_candidates.extend([
-                header_target_statement,
-                f"allpaths({target}, {header_target_statement})",  # Ordering is ideal, breadth-first from the deepest dependency, despite the docs. TODO (1) There's a bazel bug that produces extra actions, not on the path but downstream, so we probably want to pass --noinclude_aspects per https://github.com/bazelbuild/bazel/issues/18289 and https://github.com/bazelbuild/bazel/issues/16310 to eliminate them (at the cost of some valid aspects). (2) We might want to benchmark with --infer_universe_scope (if supported) and --universe-scope=target with query allrdeps({header_target_statement}, <maybe some limited depth>) or rdeps, checking speed but also ordering (the docs indicate it is likely to be lost, which is a problem) and for inclusion of the header target. We'd guess it'll have the same aspects bug as allpaths. (3) We probably also also want to *just* run this query, not the whole list, since it captures the former and is therefore unlikely to add much latency, since a given header is probabably either used internally to the target (find on first match) for header-only (must traverse all paths in all targets until you get a match) for all top-level targets, and since we can separate out the last, see below.
                 f'deps({target})', # TODO: Let's detect out-of-bazel, absolute  paths and run this if and only if we're looking for a system header. We need to think about how we want to handle absolute paths more generally, perhaps normalizing them to relative if possible, like with the windows absolute path issue, above.
             ])
         for target_statement in target_statement_candidates:
