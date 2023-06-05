@@ -825,7 +825,6 @@ def _convert_compile_commands(aquery_output, focused_on_file: str = None):
             assert not target.startswith('//external'), f"Expecting external targets will start with @. Found //external for action {action}, target {target}"
             action.is_external = target.startswith('@') and not target.startswith('@//')
 
-    outputs = []
     # Process each action from Bazelisms -> file paths and their clang commands
     # Threads instead of processes because most of the execution time is farmed out to subprocesses. No need to sidestep the GIL. Might change after https://github.com/clangd/clangd/issues/123 resolved
     with concurrent.futures.ThreadPoolExecutor(
@@ -838,6 +837,7 @@ def _convert_compile_commands(aquery_output, focused_on_file: str = None):
             timeout=3 if focused_on_file else None  # If running in fast, interactive mode with --file, we need to cap latency. #TODO test timeout--if it doesn't work, cap input length here, before passing in array. Might also want to divide timeout/cap by #targets
         )
         # Collect outputs, tolerating any timeouts
+        outputs = []
         try:
             for output in output_iterator:
                 outputs.append(output)
