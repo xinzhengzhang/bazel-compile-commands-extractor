@@ -845,8 +845,8 @@ def _convert_compile_commands(aquery_output, focused_on_file: str = None):
             assert focused_on_file, "Timeout should only have been set in the fast, interactive --file mode, focused on a single file."
             if not found_header_focused_upon.is_set():
                 log_warning(f""">>> Timed out looking for a command for {focused_on_file}
-        If that's a source file, please report this. We should work to improve the performance.
-        If that's a header file, we should probably do the same, but it may be unavoidable.""")
+    If that's a source file, please report this. We should work to improve the performance.
+    If that's a header file, we should probably do the same, but it may be unavoidable.""")
 
     # Yield as compile_commands.json entries
     header_files_already_written = set()
