@@ -836,15 +836,15 @@ def _convert_compile_commands(aquery_output, focused_on_file: str = None):
             aquery_output.actions,
             timeout=3 if focused_on_file else None  # If running in fast, interactive mode with --file, we need to cap latency. #TODO test timeout--if it doesn't work, cap input length here, before passing in array. Might also want to divide timeout/cap by #targets
         )
-    # Collect outputs, tolerating any timeouts
-    outputs = []
-    try:
-        for output in output_iterator:
-            outputs.append(output)
-    except concurrent.futures.TimeoutError:
-        assert focused_on_file, "Timeout should only have been set in the fast, interactive --file mode, focused on a single file."
-        if not found_header_focused_upon.is_set():
-            log_warning(f""">>> Timed out looking for a command for {focused_on_file}
+        # Collect outputs, tolerating any timeouts
+        outputs = []
+        try:
+            for output in output_iterator:
+                outputs.append(output)
+        except concurrent.futures.TimeoutError:
+            assert focused_on_file, "Timeout should only have been set in the fast, interactive --file mode, focused on a single file."
+            if not found_header_focused_upon.is_set():
+                log_warning(f""">>> Timed out looking for a command for {focused_on_file}
     If that's a source file, please report this. We should work to improve the performance.
     If that's a header file, we should probably do the same, but it may be unavoidable.""")
 
@@ -979,23 +979,59 @@ def _get_commands(target: str, flags: str):
 
 
     # Then, actually query Bazel's compile actions for that configured target
-    target_statement = f'deps({target})' # TODO we should always be quoting targets when we splice them in. Let's use single quotes like with mnemonic, above. See slightly down in https://bazel.build/query/language#tokens
+    target_statement = f"deps('{target}')"
     compile_commands = [] # TODO simplify loop, especially if we can reduce it to one command per case (see below)? Move warning messages outside?
     if file_flags:
         file_path = file_flags[0]
+        # Normalize file_path into 2 types of relative paths.
+        # Source file. 1. <WORKSPACE_ROOT>/srcs/file 2. <OUTPUT_BASE>/external/<REPO>/srcs/file
+        # Genfiles or output file. <EXECUTION_ROOT>/bazel-out/<configurations>/bin/srcs/file
+
+        pure_path = pathlib.PurePath(file_path)
+
+        if pure_path.is_absolute():
+            workspace_root = subprocess.run(["bazel", "info", "workspace"], capture_output=True, text=True, check=True).stdout.strip()
+            output_base = subprocess.run(["bazel", "info", "output_base"], capture_output=True, text=True, check=True).stdout.strip()
+            execution_root = subprocess.run(["bazel", "info", "execution_root"], capture_output=True, text=True, check=True).stdout.strip()
+
+            if pure_path.is_relative_to(workspace_root):
+                file_path = str(pure_path.relative_to(workspace_root))
+            # Execution_root is longer then output_base
+            elif pure_path.is_relative_to(execution_root):
+                file_path = str(pure_path.relative_to(execution_root))
+            elif pure_path.is_relative_to(output_base):
+                file_path = str(pure_path.relative_to(output_base))
+            else:
+                # Treat pure_path as system absolute path
+                pass
+
         found = False
         target_statement_candidates = []
         if file_path.endswith(_get_files.source_extensions):
             target_statement_candidates.append(f"inputs('{re.escape(file_path)}', {target_statement})")
         else:
-            fname = os.path.basename(file_path) # TODO consider running a  preliminary aquery to make this more specific, getting the targets that generate the given file. Use outputs() aquery function. Should also test the case where the file is generated/is coming in as a filegroup--that's likely to be fixed by this change.
-            header_target_statement = f"let v = {target_statement} in attr(hdrs, '{fname}', $v) + attr(srcs, '{fname}', $v)" # Bazel does not list headers as direct inputs, but rather hides them behind "middlemen", necessitating a query like this.
+            cmd = f"bazel aquery 'outputs('{re.escape(file_path)}', {target_statement})' {' '.join(additional_flags)} | grep -o 'Target: .*' | grep -o '[@/].*'"
+            middle_target_candidates = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False).stdout.strip().splitlines()
+            # TODO We should remove prefix @ in labels since it will cause empty result in bazel query
+            middle_target_candidates = [re.sub(r'^@', '', candidate) for candidate in middle_target_candidates]
+
+            if middle_target_candidates:
+                log_info(f">>> File detected as intermediate of {middle_target_candidates}")
+                # TODO We should replace filter('{candidate}', deps('{target}')) with '{candidate}' until https://github.com/bazelbuild/bazel/issues/18633 is fixed.
+                target_statement_candidates.extend(
+                    [f"allpaths('{target}', filter('{re.escape(candidate)}$', {target_statement}))" for candidate in middle_target_candidates])
+            else:
+                fname = os.path.basename(file_path) # TODO consider running a  preliminary aquery to make this more specific, getting the targets that generate the given file. Use outputs() aquery function. Should also test the case where the file is generated/is coming in as a filegroup--that's likely to be fixed by this change.
+                header_target_statement = f"let v = {target_statement} in attr(hdrs, '{fname}', $v) + attr(srcs, '{fname}', $v)" # Bazel does not list headers as direct inputs, but rather hides them behind "middlemen", necessitating a query like this.
+                target_statement_candidates.extend([
+                    header_target_statement,
+                    f"allpaths('{target}', {header_target_statement})",  # Ordering is ideal, breadth-first from the deepest dependency, despite the docs. TODO (1) There's a bazel bug that produces extra actions, not on the path but downstream, so we probably want to pass --noinclude_aspects per https://github.com/bazelbuild/bazel/issues/18289 and https://github.com/bazelbuild/bazel/issues/16310 to eliminate them (at the cost of some valid aspects). (2) We might want to benchmark with --infer_universe_scope (if supported) and --universe-scope=target with query allrdeps({header_target_statement}, <maybe some limited depth>) or rdeps, checking speed but also ordering (the docs indicate it is likely to be lost, which is a problem) and for inclusion of the header target. We'd guess it'll have the same aspects bug as allpaths. (3) We probably also also want to *just* run this query, not the whole list, since it captures the former and is therefore unlikely to add much latency, since a given header is probabably either used internally to the target (find on first match) for header-only (must traverse all paths in all targets until you get a match) for all top-level targets, and since we can separate out the last, see below.
+                ])
             target_statement_candidates.extend([
-                header_target_statement,
-                f"allpaths({target}, {header_target_statement})",  # Ordering is ideal, breadth-first from the deepest dependency, despite the docs. TODO (1) There's a bazel bug that produces extra actions, not on the path but downstream, so we probably want to pass --noinclude_aspects per https://github.com/bazelbuild/bazel/issues/18289 and https://github.com/bazelbuild/bazel/issues/16310 to eliminate them (at the cost of some valid aspects). (2) We might want to benchmark with --infer_universe_scope (if supported) and --universe-scope=target with query allrdeps({header_target_statement}, <maybe some limited depth>) or rdeps, checking speed but also ordering (the docs indicate it is likely to be lost, which is a problem) and for inclusion of the header target. We'd guess it'll have the same aspects bug as allpaths. (3) We probably also also want to *just* run this query, not the whole list, since it captures the former and is therefore unlikely to add much latency, since a given header is probabably either used internally to the target (find on first match) for header-only (must traverse all paths in all targets until you get a match) for all top-level targets, and since we can separate out the last, see below.
-                f'deps({target})', # TODO: Let's detect out-of-bazel, absolute  paths and run this if and only if we're looking for a system header. We need to think about how we want to handle absolute paths more generally, perhaps normalizing them to relative if possible, like with the windows absolute path issue, above.
+                f"deps('{target}')", # TODO: Let's detect out-of-bazel, absolute  paths and run this if and only if we're looking for a system header. We need to think about how we want to handle absolute paths more generally, perhaps normalizing them to relative if possible, like with the windows absolute path issue, above.
             ])
         for target_statement in target_statement_candidates:
+            log_info(f">>> Trying {target_statement}")
             commands = list(_get_compile_commands_for_aquery(target_statement, additional_flags, file_path))
             compile_commands.extend(commands)  # If we did the work to generate a command, we'll update it, whether it's for the requested file or not.
             if any(command['file'].endswith(file_path) for command in commands):
