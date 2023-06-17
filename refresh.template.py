@@ -1010,13 +1010,16 @@ def _get_commands(target: str, flags: str):
         if file_path.endswith(_get_files.source_extensions):
             target_statement_candidates.append(f"inputs('{re.escape(file_path)}', {target_statement})")
         else:
-            middle_target_candidates = subprocess.Popen(f"bazel aquery 'outputs('{re.escape(file_path)}', {target_statement})' | grep -o 'Target: .*' | grep -o '[@/].*'", shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).communicate()[0].decode("utf-8").strip().splitlines()
+            cmd = f"bazel aquery 'outputs('{re.escape(file_path)}', {target_statement})' {' '.join(additional_flags)} | grep -o 'Target: .*' | grep -o '[@/].*'"
+            middle_target_candidates = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False).stdout.strip().splitlines()
+            # TODO We should remove prefix @ in labels since it will cause empty result in bazel query
+            middle_target_candidates = [re.sub(r'^@', '', candidate) for candidate in middle_target_candidates]
+
             if middle_target_candidates:
                 log_info(f">>> File detected as intermediate of {middle_target_candidates}")
-                target_statement_candidates.extend([
-                    # TODO there seems a bug in bazel aquery? There are many targets listed output when executing bazel query "somepath('TARGET', 'SUBTARGET')" but there isn't any actions output when executing bazel aquery "somepath('TARGET', 'SUBTARGET')" and it works when executing bazel aquery "<somepath of target>"
-                    f"allpaths({target}, {'+'.join(middle_target_candidates)})"
-                ])
+                # TODO We should replace filter('{candidate}', deps('{target}')) with '{candidate}' until https://github.com/bazelbuild/bazel/issues/18633 is fixed.
+                target_statement_candidates.extend(
+                    [f"allpaths('{target}', filter('{re.escape(candidate)}$', {target_statement}))" for candidate in middle_target_candidates])
             else:
                 fname = os.path.basename(file_path) # TODO consider running a  preliminary aquery to make this more specific, getting the targets that generate the given file. Use outputs() aquery function. Should also test the case where the file is generated/is coming in as a filegroup--that's likely to be fixed by this change.
                 header_target_statement = f"let v = {target_statement} in attr(hdrs, '{fname}', $v) + attr(srcs, '{fname}', $v)" # Bazel does not list headers as direct inputs, but rather hides them behind "middlemen", necessitating a query like this.
