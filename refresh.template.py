@@ -990,9 +990,9 @@ def _get_commands(target: str, flags: str):
         pure_path = pathlib.PurePath(file_path)
 
         if pure_path.is_absolute():
-            workspace_root = subprocess.check_output(["bazel", "info", "workspace"], stderr=subprocess. DEVNULL).decode("utf-8").strip()
-            output_base = subprocess.check_output(["bazel", "info", "output_base"], stderr=subprocess. DEVNULL).decode("utf-8").strip()
-            execution_root = subprocess.check_output(["bazel", "info", "execution_root"], stderr=subprocess. DEVNULL).decode("utf-8").strip()
+            workspace_root = subprocess.run(["bazel", "info", "workspace"], capture_output=True, text=True, check=True).stdout.strip()
+            output_base = subprocess.run(["bazel", "info", "output_base"], capture_output=True, text=True, check=True).stdout.strip()
+            execution_root = subprocess.run(["bazel", "info", "execution_root"], capture_output=True, text=True, check=True).stdout.strip()
 
             if pure_path.is_relative_to(workspace_root):
                 file_path = str(pure_path.relative_to(workspace_root))
