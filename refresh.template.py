@@ -1031,6 +1031,7 @@ def _get_commands(target: str, flags: str):
                 f"deps('{target}')", # TODO: Let's detect out-of-bazel, absolute  paths and run this if and only if we're looking for a system header. We need to think about how we want to handle absolute paths more generally, perhaps normalizing them to relative if possible, like with the windows absolute path issue, above.
             ])
         for target_statement in target_statement_candidates:
+            log_info(f">>> Trying {target_statement}")
             commands = list(_get_compile_commands_for_aquery(target_statement, additional_flags, file_path))
             compile_commands.extend(commands)  # If we did the work to generate a command, we'll update it, whether it's for the requested file or not.
             if any(command['file'].endswith(file_path) for command in commands):
